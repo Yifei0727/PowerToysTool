@@ -3,6 +3,7 @@
 
 import codecs
 import random
+import re
 import struct
 import sys
 
@@ -40,6 +41,10 @@ def generate_pan():
     return generate_num(16)
 
 
+def generate_psn():
+    return generate_num(2)
+
+
 def generate_pin():
     return generate_num(6)
 
@@ -54,6 +59,16 @@ def pad_pan_format(pan, block_size):
     pan12 = get_pan_12_from_pan(pan)
     assert block_size == 8 or block_size == 16
     return '%s%s' % ('0' * (block_size * 2 - 12), pan12)
+
+
+def get_pan_16_from_pan_psn(pan, psn):
+    if len(pan) < 16:
+        pan = '0' * (16 - len(pan)) + pan
+    if len(psn) < 2:
+        psn = '0' * (2 - len(psn)) + psn
+    assert len(pan) >= 16, "pan too short"
+    assert len(psn) == 2, "psn too long"
+    return (pan + psn)[-16:]
 
 
 def get_pan_12_from_pan(pan):
@@ -131,5 +146,112 @@ def generate_one(key=None):
     return rec
 
 
+def extract_numer(b):
+    # type: (bytes)->str
+    str_buf = codecs.encode(b, 'hex').decode("ascii")
+    n_buf = []
+    h_buf = []
+    for c in str_buf:
+        if c.isdigit():
+            n_buf.append(c)
+        else:
+            h_buf.append(c)
+    for c in h_buf:
+        n_buf.append("%d" % (int(c, 16) % 10))
+    return ''.join(n_buf)
+
+
+def generate_mst(key=None):
+    # type: ([str])->object
+    """
+    生成一条数据记录
+    :param key: 加密密钥
+    :return: 产生的随机记录
+    """
+    rec = {}
+    rec.update(PAN=generate_pan())
+    rec.update(PSN=generate_psn())
+    rec.update(ATC=generate_num(3))
+    rec.update(VER='1')
+    rec.update(TIMESTAMP=generate_num(16))
+    rec.update(EXPIRETIME=generate_num(4))
+
+    if len(key) == 16:
+        engine = triple_des(key)
+    else:
+        raise ValueError("Invalid Key")
+
+    udk_engine = calc_card_udk_pboc_2(engine, rec.get("PAN"), rec.get("PSN"))
+    session_key = calc_mst_session_key(udk_engine, rec.get("ATC"), rec.get("TIMESTAMP"))
+    buf = []
+    # CC CV TT TT TT TT TT TT TT TT YY YY MM MM
+    buf.append(rec.get("ATC"))
+    buf.append(rec.get("VER"))
+    buf.append(rec.get("TIMESTAMP"))
+    buf.append(codecs.encode(bytes(rec.get("EXPIRETIME"), 'ascii'), 'hex').decode("ascii"))
+
+    data = codecs.decode(''.join(buf).encode('ascii'), 'hex')
+    des_engine_1 = des(session_key[:8], mode=slowDES.CBC, IV='\x00' * 8, pad='\x00', padmode=slowDES.PAD_NORMAL)
+    des_engine_1.setMode(slowDES.CBC)
+    des_engine_1.setPadding("\x00")
+    des_engine_1.setPadMode(slowDES.PAD_NORMAL)
+    des_engine_1.setIV('\x00' * 8)
+
+    des_engine_2 = des(session_key[8:])
+    des_engine_3 = des(session_key[:8])
+
+    block = des_engine_1.encrypt(data)
+    # print(codecs.encode(block, 'hex'))
+    block = block[-8:]
+    # print(codecs.encode(block, 'hex'))
+    block = des_engine_2.decrypt(block)
+    # print(codecs.encode(block, 'hex'))
+    out = des_engine_3.encrypt(block)
+    # print(codecs.encode(out, 'hex'))
+    rec.update(MST=extract_numer(out)[:6])
+    return rec
+
+
+def reverse_data_bits(data):
+    # type: (bytes)->bytes
+    arr_buf = []
+    for i in data:
+        arr_buf.append(i ^ 0xff)
+    return bytes(arr_buf)
+
+
+def calc_card_udk_pboc_2(engine, pan, psn):
+    spn = get_pan_16_from_pan_psn(pan, psn)
+    block = codecs.decode(spn, 'hex')
+    assert len(block) == 8
+    l_key = engine.encrypt(block)
+    r_key = engine.encrypt(reverse_data_bits(block))
+    return triple_des(l_key + r_key)
+
+
+N16 = re.compile("[0-9]{16}")
+N03 = re.compile("[0-9]{3}")
+
+
+def calc_mst_session_key(engine, atc, time):
+    # type: (triple_des,[str],[str])->object
+    assert N16.match(time) is not None, "time is 16 n"
+    assert N03.match(atc) is not None, "atc is 3 n"
+    buf = []
+    for i in atc:
+        buf.append("0")
+        buf.append(i)
+    buf.append(time[6:])
+    left = codecs.decode(''.join(buf).encode('ascii'), 'hex')
+    right = reverse_data_bits(left)
+    l_data = engine.encrypt(left)
+    r_data = engine.encrypt(right)
+    return l_data + r_data
+
+
 def test():
-    print(generate_one(codecs.decode('11111111111111112222222222222222', 'hex')))
+    print(generate_one(codecs.decode(b'11111111111111112222222222222222', 'hex')))
+
+
+def test_mst():
+    print(generate_mst(codecs.decode(b"10101010232323233232323245454545", 'hex')))
