@@ -37,12 +37,23 @@ def generate_num(num_char):
     return ''.join(buf)
 
 
+def generate_counter():
+    v = generate_num(3)
+    if v == "000":
+        return generate_counter()
+    return v
+
+
 def generate_pan():
     return generate_num(16)
 
 
 def generate_psn():
     return generate_num(2)
+
+
+def generate_yymm():
+    return generate_num(2) + '%02d' % random.randint(1, 12)
 
 
 def generate_pin():
@@ -171,10 +182,10 @@ def generate_mst(key=None):
     rec = {}
     rec.update(PAN=generate_pan())
     rec.update(PSN=generate_psn())
-    rec.update(ATC=generate_num(3))
+    rec.update(ATC=generate_counter())
     rec.update(VER='1')
-    rec.update(TIMESTAMP=generate_num(16))
-    rec.update(EXPIRETIME=generate_num(4))
+    rec.update(TIMESTAMP="0000" + generate_num(12))
+    rec.update(EXPIRETIME=generate_yymm())
 
     if len(key) == 16:
         engine = triple_des(key)
