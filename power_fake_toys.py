@@ -266,3 +266,41 @@ def test():
 
 def test_mst():
     print(generate_mst(codecs.decode(b"10101010232323233232323245454545", 'hex')))
+
+
+def cal_buf_odd(buf: bytes):
+    arr = []
+    for b in buf:
+        bit = 0b10000000
+        bit_count = 0
+        for _ in range(7):
+            if bit & b != 0:
+                bit_count += 1
+            bit = bit >> 1
+        arr.append((b & 0b11111110) | (1 if bit_count % 2 == 0 else 0))
+    return bytes(arr)
+
+
+def generate_key_by_kek(kek=None, alg='sm4'):
+    result = {}
+    zero = codecs.decode(b'00000000000000000000000000000000', 'hex')
+    if alg == 'sm4':
+        assert len(kek) == 16, "SM4 KEK Must be 128bits"
+        buf = random.randbytes(16)
+        result.update(
+            WK=codecs.encode(SM4(codecs.encode(kek, 'hex')).encrypt(buf), encoding="hex").decode('ascii').upper())
+        result.update(ALG="SM4")
+        result.update(
+            CHK=codecs.encode(SM4(codecs.encode(buf, 'hex')).encrypt(zero), encoding="hex").decode('ascii').upper()[
+                :16])
+    elif alg == 'des':
+        assert len(kek) in (16, 24), "DES KEK Must be 128/192bits"
+        buf = random.randbytes(len(kek))
+        buf = cal_buf_odd(buf)
+        result.update(WK=codecs.encode(triple_des(kek).encrypt(buf), encoding="hex").decode('ascii').upper())
+        result.update(ALG="DES")
+        result.update(CHK=codecs.encode(triple_des(buf).encrypt(zero[:8]), encoding="hex").decode('ascii').upper()[:16])
+    else:
+        raise ValueError("alg not support")
+
+    return result
